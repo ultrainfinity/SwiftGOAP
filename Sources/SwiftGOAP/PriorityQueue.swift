@@ -6,6 +6,11 @@ public struct PriorityQueue<Element> {
     private var heap: [(priority: Int, element: Element)] = []
 
     public init() {}
+}
+
+extension PriorityQueue: Sendable where Element: Sendable {}
+
+extension PriorityQueue {
 
     public var isEmpty: Bool { heap.isEmpty }
     public var count: Int { heap.count }

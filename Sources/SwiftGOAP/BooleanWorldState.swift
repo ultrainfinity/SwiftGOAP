@@ -5,9 +5,14 @@
 /// outside `mask` are "don't care" — useful for partial conditions and partial
 /// effects. A fully-defined state has `mask` set on every relevant bit.
 ///
+/// The type maintains the invariant `bits & ~mask == 0`: a bit cannot be
+/// "true" if it's outside the mask. Direct construction sanitizes the inputs
+/// to preserve this; otherwise satisfaction checks could be fooled by phantom
+/// bits with no semantic value.
+///
 /// Use this state type when speed matters and the world's facts are all
 /// boolean. All comparisons and updates run in O(1) on a single 64-bit word.
-public struct BooleanWorldState: WorldState {
+public struct BooleanWorldState: WorldState, Sendable {
     public typealias Conditions = BooleanWorldState
     public typealias Effects = BooleanWorldState
 
@@ -18,7 +23,9 @@ public struct BooleanWorldState: WorldState {
     public var mask: UInt64
 
     public init(bits: UInt64 = 0, mask: UInt64 = 0) {
-        self.bits = bits
+        // Enforce invariant: bits set outside mask are meaningless and would
+        // make `satisfies` produce wrong answers, so we drop them on the way in.
+        self.bits = bits & mask
         self.mask = mask
     }
 

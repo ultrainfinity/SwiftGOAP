@@ -9,11 +9,11 @@
 /// They are associated types so each conforming state type can choose the
 /// representation that fits best — bitmasks for performance, dictionaries for
 /// flexibility.
-public protocol WorldState: Hashable {
+public protocol WorldState: Hashable, Sendable {
     /// A partial description of facts to test against a state.
-    associatedtype Conditions
+    associatedtype Conditions: Sendable
     /// A description of how an action changes a state.
-    associatedtype Effects
+    associatedtype Effects: Sendable
 
     /// Whether this state satisfies every fact described by `conditions`.
     func satisfies(_ conditions: Conditions) -> Bool

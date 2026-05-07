@@ -1,5 +1,5 @@
 /// A value held by a fact in a `RichWorldState`.
-public enum StateValue: Hashable {
+public enum StateValue: Hashable, Sendable {
     case bool(Bool)
     case integer(Int)
     case real(Double)
@@ -16,7 +16,7 @@ public enum StateValue: Hashable {
 }
 
 /// A test against a single fact in a `RichWorldState`.
-public enum StateCondition: Hashable {
+public enum StateCondition: Hashable, Sendable {
     case equals(StateValue)
     case notEquals(StateValue)
     case greaterThan(Double)
@@ -46,13 +46,16 @@ public enum StateCondition: Hashable {
 }
 
 /// A change to apply to a single fact in a `RichWorldState`.
-public enum StateEffect: Hashable {
+public enum StateEffect: Hashable, Sendable {
     /// Replace the fact's value.
     case set(StateValue)
-    /// Add a delta to a numeric fact. If the fact is missing or non-numeric,
-    /// the result is the delta as a `.real`.
+    /// Add a delta to a numeric fact. The fact must already exist with a
+    /// numeric value (`.integer` or `.real`); applying `.add` to a missing or
+    /// non-numeric fact triggers a runtime precondition failure. Use `.set`
+    /// to initialize a fact before adding to it.
     case add(Double)
-    /// Subtract a delta from a numeric fact. Same fallback as `.add`.
+    /// Subtract a delta from a numeric fact. Same numeric requirement as
+    /// `.add`.
     case subtract(Double)
 }
 
@@ -61,7 +64,7 @@ public enum StateEffect: Hashable {
 /// Use this when your world has numeric quantities (health, ammo, distance) or
 /// when the set of facts changes at runtime. For pure boolean worlds with a
 /// fixed schema, `BooleanWorldState` is faster.
-public struct RichWorldState: WorldState {
+public struct RichWorldState: WorldState, Sendable {
     public typealias Conditions = [String: StateCondition]
     public typealias Effects = [String: StateEffect]
 
@@ -87,9 +90,9 @@ public struct RichWorldState: WorldState {
             case .set(let v):
                 next[key] = v
             case .add(let delta):
-                next[key] = Self.combine(next[key], delta: delta)
+                next[key] = Self.combine(key, current: next[key], delta: delta)
             case .subtract(let delta):
-                next[key] = Self.combine(next[key], delta: -delta)
+                next[key] = Self.combine(key, current: next[key], delta: -delta)
             }
         }
         return RichWorldState(next)
@@ -105,8 +108,10 @@ public struct RichWorldState: WorldState {
     }
 
     /// Adds `delta` to a fact's numeric value, preserving `.integer` if the
-    /// existing value was an integer and the delta is a whole number.
-    private static func combine(_ current: StateValue?, delta: Double) -> StateValue {
+    /// existing value was an integer and the delta is a whole number. Traps if
+    /// the fact is missing or non-numeric — silently overwriting a bool/text
+    /// fact with a number would mask real action-modeling bugs.
+    private static func combine(_ key: String, current: StateValue?, delta: Double) -> StateValue {
         switch current {
         case .integer(let i):
             if delta.rounded() == delta {
@@ -115,11 +120,16 @@ public struct RichWorldState: WorldState {
             return .real(Double(i) + delta)
         case .real(let d):
             return .real(d + delta)
-        case nil, .bool, .text:
-            if delta.rounded() == delta {
-                return .integer(Int(delta))
-            }
-            return .real(delta)
+        case .bool, .text:
+            preconditionFailure(
+                "RichWorldState: cannot apply numeric effect (.add/.subtract) to non-numeric fact '\(key)' (value: \(current!)). " +
+                "Use .set to replace the value, or initialize '\(key)' as .integer/.real first."
+            )
+        case nil:
+            preconditionFailure(
+                "RichWorldState: cannot apply numeric effect (.add/.subtract) to missing fact '\(key)'. " +
+                "Initialize it with .set before applying .add or .subtract."
+            )
         }
     }
 }

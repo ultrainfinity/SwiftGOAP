@@ -4,7 +4,7 @@
 /// the world according to its `effects`. `cost` is the weight A* uses to
 /// minimize total plan cost. Costs must be non-negative; using cost ≥ 1 keeps
 /// the standard "unsatisfied facts" heuristic admissible in the simplest case.
-public protocol GOAPAction {
+public protocol GOAPAction: Sendable {
     associatedtype State: WorldState
 
     var name: String { get }
@@ -16,7 +16,7 @@ public protocol GOAPAction {
 /// A concrete `GOAPAction` value type. Use this when you don't need to attach
 /// per-action behaviour beyond the planning data — domain code can wire up
 /// execution by switching on `name`.
-public struct BasicAction<State: WorldState>: GOAPAction {
+public struct BasicAction<State: WorldState>: GOAPAction, Sendable {
     public let name: String
     public let cost: Int
     public let preconditions: State.Conditions

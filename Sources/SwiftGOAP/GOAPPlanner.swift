@@ -10,7 +10,7 @@
 /// when one action can resolve multiple facts at once. In that case A* may
 /// return a non-optimal plan; for typical game scenarios this is the standard
 /// trade-off and the resulting plans are still sensible.
-public struct GOAPPlanner<State: WorldState> {
+public struct GOAPPlanner<State: WorldState>: Sendable {
     /// Cap on the number of states expanded before the planner gives up. This
     /// prevents pathological search trees from running forever.
     public var maxNodes: Int
