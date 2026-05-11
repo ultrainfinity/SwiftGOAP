@@ -1,6 +1,6 @@
 # SwiftGOAP
 
-Goal-Oriented Action Planning for Swift. Pure Swift, zero dependencies, cross‑platform.
+Goal-Oriented Action Planning for Swift. Pure Swift, zero dependencies, cross-platform, Sendable-ready.
 
 ## What is GOAP?
 
@@ -12,10 +12,13 @@ That means you can change the world, add new actions, or shift the agent's goals
 
 - **Pure Swift, zero dependencies.** No UIKit, SpriteKit, GameplayKit, or Foundation.
 - **Cross-platform.** Works on iOS, macOS, tvOS, watchOS, and Linux.
+- **Sendable everywhere.** All public types conform to `Sendable` — ready for Swift 6 strict concurrency.
 - **Two world-state representations.**
   - `BooleanWorldState` — 64 boolean facts in a single `UInt64`. O(1) compares, O(1) updates, ideal for performance-critical agents.
   - `RichWorldState` — `[String: StateValue]` with bool / int / double / string values, supporting numeric conditions (`>=`, `<`, etc.) and effects (`add`, `subtract`).
-- **A\* planner** with optimal-cost search and a configurable expansion cap.
+- **A\* planner** with closed-set optimisation, optimal-cost search, and a configurable expansion cap.
+- **`GOAPPlan` value type** carrying the action sequence, total cost, and the full trajectory of intermediate states.
+- **Type-safe facts.** `BooleanWorldState` accepts any `RawRepresentable` whose `RawValue` is `Int`, so you can use enums instead of magic indices.
 - **Multi-goal support** — the planner picks the highest-priority goal that has a plan.
 
 ## Installation
@@ -34,40 +37,45 @@ Then depend on the `SwiftGOAP` product:
 
 ## Quick start: combat AI with `BooleanWorldState`
 
-A simple agent that picks up a gun, loads it, and shoots an enemy.
+A simple agent that picks up a gun, loads it, and shoots an enemy. Facts are an enum, so you never deal with raw bit indices.
 
 ```swift
 import SwiftGOAP
 
-// Facts: 0 = hasGun, 1 = gunLoaded, 2 = enemyDead
+enum Fact: Int { case hasGun, gunLoaded, enemyDead }
+
 let pickupGun = BasicAction<BooleanWorldState>(
     name: "pickupGun",
-    preconditions: BooleanWorldState.facts([(0, false)]),
-    effects:       BooleanWorldState.facts([(0, true)])
+    preconditions: BooleanWorldState.facts([(Fact.hasGun, false)]),
+    effects:       BooleanWorldState.facts([(Fact.hasGun, true)])
 )
 
 let loadGun = BasicAction<BooleanWorldState>(
     name: "loadGun",
-    preconditions: BooleanWorldState.facts([(0, true), (1, false)]),
-    effects:       BooleanWorldState.facts([(1, true)])
+    preconditions: BooleanWorldState.facts([(Fact.hasGun, true), (Fact.gunLoaded, false)]),
+    effects:       BooleanWorldState.facts([(Fact.gunLoaded, true)])
 )
 
 let shootEnemy = BasicAction<BooleanWorldState>(
     name: "shootEnemy",
-    preconditions: BooleanWorldState.facts([(0, true), (1, true)]),
-    effects:       BooleanWorldState.facts([(1, false), (2, true)])
+    preconditions: BooleanWorldState.facts([(Fact.hasGun, true), (Fact.gunLoaded, true)]),
+    effects:       BooleanWorldState.facts([(Fact.gunLoaded, false), (Fact.enemyDead, true)])
 )
 
-let start = BooleanWorldState.facts([(0, false), (1, false), (2, false)])
-let goal  = BooleanWorldState.facts([(2, true)])
+let start = BooleanWorldState.facts([
+    (Fact.hasGun, false), (Fact.gunLoaded, false), (Fact.enemyDead, false)
+])
+let goal = BooleanWorldState.facts([(Fact.enemyDead, true)])
 
 let planner = GOAPPlanner<BooleanWorldState>()
 let plan = planner.plan(from: start, goal: goal, actions: [pickupGun, loadGun, shootEnemy])
 
-// plan?.map(\.name) == ["pickupGun", "loadGun", "shootEnemy"]
+// plan?.actions.map(\.name) == ["pickupGun", "loadGun", "shootEnemy"]
+// plan?.totalCost == 3
+// plan?.states.count == 4   // start + 3 intermediate states
 ```
 
-Add a `repairGun` action and the planner will use it whenever it's the cheapest path. Remove `pickupGun` and the planner returns `nil` instead of a stale FSM transition.
+Add a `repairGun` action and the planner uses it whenever it's the cheapest path. Remove `pickupGun` and the planner returns `nil` instead of a stale FSM transition.
 
 ## Numeric goals with `RichWorldState`
 
@@ -87,34 +95,39 @@ let goal: [String: StateCondition] = ["health": .greaterThanOrEqual(100)]
 let planner = GOAPPlanner<RichWorldState>()
 let plan = planner.plan(from: start, goal: goal, actions: [drinkPotion])
 
-// plan?.count == 3   // (20 → 50 → 80 → 110)
+// plan?.count == 3              // (20 → 50 → 80 → 110)
+// plan?.totalCost == 3
 ```
 
 `StateValue` conforms to the literal protocols, so you can write `["health": 20]` instead of `["health": .integer(20)]`. Conditions support `equals`, `notEquals`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`. Effects support `set`, `add`, `subtract`.
 
+> **Note**: `.add` / `.subtract` require an existing numeric value (`.integer` or `.real`). Applying them to a `.bool` / `.text` fact, or to a missing key, traps with a precondition failure — catch this in development, not in production. Use `.set(.integer(0))` first to initialise a counter.
+
 ## Multiple goals, by priority
 
-Give the agent a list of goals; the planner returns the highest-priority one it can reach.
+Give the agent a list of goals; the planner returns the highest-priority one it can reach, together with the matching plan.
 
 ```swift
 let killDragon = GOAPGoal<BooleanWorldState>(
     name: "killDragon",
-    conditions: BooleanWorldState.facts([(1, true)]),  // probably impossible
+    conditions: BooleanWorldState.facts([(Fact.enemyDead, true)]),
     priority: 10
 )
 let eatFood = GOAPGoal<BooleanWorldState>(
     name: "eatFood",
-    conditions: BooleanWorldState.facts([(0, true)]),
+    conditions: BooleanWorldState.facts([(Fact.hasGun, true)]),   // toy example
     priority: 1
 )
 
-let result = planner.plan(from: start, goals: [killDragon, eatFood], actions: actions)
-// → (goal: eatFood, plan: [eat])    // dragon-killing falls through; eating wins.
+if let result = planner.plan(from: start, goals: [killDragon, eatFood], actions: actions) {
+    print("pursuing \(result.goal.name): \(result.plan.actions.map(\.name))")
+    // → pursuing eatFood: ["pickupGun"]   (dragon goal not reachable from this state)
+}
 ```
 
 ## Custom action types
 
-`BasicAction` is a convenience. Anything that conforms to `GOAPAction` works — you can attach domain-specific behaviour (animation hooks, audio cues, callbacks) directly to your action type.
+`BasicAction` is a convenience. Anything that conforms to `GOAPAction` works — you can attach domain-specific behaviour (animation hooks, audio cues, callbacks) directly to your action type. Conform to `Sendable` if you plan to cross actor boundaries.
 
 ```swift
 struct CombatAction: GOAPAction {
@@ -123,36 +136,43 @@ struct CombatAction: GOAPAction {
     let preconditions: BooleanWorldState
     let effects: BooleanWorldState
     let animation: String
-    let onPerform: () -> Void
+    let perform: @Sendable () -> Void
 }
 ```
 
-The planner returns `[CombatAction]` so you keep all that data through to execution.
+The planner returns `GOAPPlan<CombatAction>`, so you keep all that data through to execution.
 
 ## Executing a plan
 
 The planner returns the action sequence; running it is up to you.
 
 ```swift
+guard let plan = planner.plan(from: currentWorldState, goal: goal, actions: actions) else {
+    return    // no plan exists right now
+}
+
 var state = currentWorldState
-for action in plan {
-    guard state.satisfies(action.preconditions) else { break }   // someone changed the world
+for action in plan.actions {
+    guard state.satisfies(action.preconditions) else { break }   // world drifted, re-plan
     perform(action)
     state = state.applying(action.effects)
 }
 ```
+
+You can also use `plan.states` directly — it contains the start state, every intermediate state, and the goal-satisfying final state. Handy for visualisation and debugging.
 
 When the world drifts (a door closes, ammo is taken), drop the plan and re-plan from the new state. Re-planning is cheap.
 
 ## Performance notes
 
 - `BooleanWorldState` operations are single 64-bit ALU ops. Plans of 5–10 actions over a dozen action types resolve in tens of microseconds.
+- The A\* loop uses a closed set with reopen-on-better-g, so stale frontier entries are discarded immediately instead of re-expanded.
 - The `GOAPPlanner.maxNodes` cap (default 10,000) protects against runaway searches if your action set has bad cycles or your heuristic is too weak.
 - The default heuristic counts unsatisfied facts. It is fast and produces sensible plans, but is not strictly admissible when one action satisfies multiple facts at once. In rare cases the returned plan may be one action longer than truly optimal — the standard GOAP trade-off.
 
 ## Why this exists
 
-There are GOAP implementations in C (stolk/GPGOAP), C++, C# (mountain-goap), Go, Rust, and Python — but until now, none in Swift. This package fills that gap with an idiomatic, dependency-free Swift API that works in games, simulations, and any other agent-based system.
+There are GOAP implementations in C (stolk/GPGOAP), C++, C# (mountain-goap), Go, Rust, and Python — but until now, none in Swift. This package fills that gap with an idiomatic, dependency-free, Sendable-ready Swift API that works in games, simulations, and any other agent-based system.
 
 ## License
 

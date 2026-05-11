@@ -53,15 +53,12 @@ public struct BooleanWorldState: WorldState, Sendable {
         return (bits & bit) != 0
     }
 
-    /// Convenience: build a fully-defined state from a list of `(index, value)`
-    /// pairs. Any bit not in the list defaults to `false` and is left
-    /// "don't care" — pass `fullyDefined: true` if you want every bit marked.
-    public static func facts(_ pairs: [(Int, Bool)], fullyDefined: Bool = false) -> BooleanWorldState {
+    /// Builds a state from a list of `(index, value)` pairs. Bits not in the
+    /// list are left "don't care". For closed-world semantics where every
+    /// unspecified bit means `false`, set `mask = .max` directly on the result.
+    public static func facts(_ pairs: [(Int, Bool)]) -> BooleanWorldState {
         var s = BooleanWorldState()
         for (i, v) in pairs { s.set(i, to: v) }
-        if fullyDefined {
-            s.mask = .max
-        }
         return s
     }
 
@@ -81,5 +78,38 @@ public struct BooleanWorldState: WorldState, Sendable {
         let care = conditions.mask
         let diff = (bits ^ conditions.bits) & care
         return diff.nonzeroBitCount
+    }
+}
+
+// MARK: - Type-safe fact enums
+
+/// Convenience overloads that accept any `RawRepresentable` whose `RawValue`
+/// is `Int`. This lets you define facts as an enum and avoid magic indices:
+///
+/// ```swift
+/// enum Fact: Int { case hasGun, gunLoaded, enemyDead }
+/// var s = BooleanWorldState.facts([(Fact.hasGun, true), (.gunLoaded, false)])
+/// s.set(.enemyDead, to: false)
+/// s.get(.hasGun)        // → Optional(true)
+/// ```
+extension BooleanWorldState {
+    public static func facts<F: RawRepresentable>(_ pairs: [(F, Bool)]) -> BooleanWorldState
+    where F.RawValue == Int {
+        facts(pairs.map { ($0.0.rawValue, $0.1) })
+    }
+
+    public mutating func set<F: RawRepresentable>(_ fact: F, to value: Bool)
+    where F.RawValue == Int {
+        set(fact.rawValue, to: value)
+    }
+
+    public mutating func clear<F: RawRepresentable>(_ fact: F)
+    where F.RawValue == Int {
+        clear(fact.rawValue)
+    }
+
+    public func get<F: RawRepresentable>(_ fact: F) -> Bool?
+    where F.RawValue == Int {
+        get(fact.rawValue)
     }
 }

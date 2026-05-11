@@ -20,17 +20,25 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
     }
 
     /// The cheapest plan from `start` that satisfies `goal`, or `nil` if no
-    /// plan exists within `maxNodes` expansions. An empty array means the
-    /// start state already satisfies the goal.
+    /// plan exists within `maxNodes` expansions. The returned `GOAPPlan`
+    /// contains both the action sequence and the trajectory of intermediate
+    /// states. An empty plan (`isEmpty == true`) means the start state already
+    /// satisfies the goal.
     public func plan<Action: GOAPAction>(
         from start: State,
         goal: State.Conditions,
         actions: [Action]
-    ) -> [Action]? where Action.State == State {
-        if start.satisfies(goal) { return [] }
+    ) -> GOAPPlan<Action>? where Action.State == State {
+        if start.satisfies(goal) {
+            return GOAPPlan(actions: [], states: [start])
+        }
 
         var gScore: [State: Int] = [start: 0]
         var cameFrom: [State: (predecessor: State, action: Action)] = [:]
+        // Set of states already finalized via dequeue. A state can be reopened
+        // if a successor relaxation later finds a strictly cheaper path to it,
+        // which preserves correctness when the heuristic is inadmissible.
+        var closed: Set<State> = []
 
         var frontier = PriorityQueue<State>()
         frontier.enqueue(start, priority: start.heuristicDistance(to: goal))
@@ -38,8 +46,14 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
         var expansions = 0
 
         while let current = frontier.dequeue() {
+            // Stale frontier entries get skipped here — we already finalized
+            // this state (or a strictly cheaper path to it) on a prior dequeue.
+            if closed.contains(current) { continue }
+            closed.insert(current)
+
             if current.satisfies(goal) {
-                return reconstruct(target: current, cameFrom: cameFrom)
+                let (acts, states) = reconstruct(target: current, cameFrom: cameFrom)
+                return GOAPPlan(actions: acts, states: states)
             }
 
             expansions += 1
@@ -57,6 +71,8 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
                 if tentativeG < (gScore[next] ?? .max) {
                     gScore[next] = tentativeG
                     cameFrom[next] = (current, action)
+                    // Reopen if we previously closed this state at a worse g.
+                    closed.remove(next)
                     let f = tentativeG + next.heuristicDistance(to: goal)
                     frontier.enqueue(next, priority: f)
                 }
@@ -71,7 +87,7 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
         from start: State,
         goal: GOAPGoal<State>,
         actions: [Action]
-    ) -> [Action]? where Action.State == State {
+    ) -> GOAPPlan<Action>? where Action.State == State {
         plan(from: start, goal: goal.conditions, actions: actions)
     }
 
@@ -83,7 +99,7 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
         from start: State,
         goals: [GOAPGoal<State>],
         actions: [Action]
-    ) -> (goal: GOAPGoal<State>, plan: [Action])? where Action.State == State {
+    ) -> (goal: GOAPGoal<State>, plan: GOAPPlan<Action>)? where Action.State == State {
         let ordered = goals.sorted { $0.priority > $1.priority }
         for goal in ordered {
             if let plan = plan(from: start, goal: goal.conditions, actions: actions) {
@@ -96,13 +112,15 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
     private func reconstruct<Action: GOAPAction>(
         target: State,
         cameFrom: [State: (predecessor: State, action: Action)]
-    ) -> [Action] where Action.State == State {
-        var path: [Action] = []
+    ) -> (actions: [Action], states: [State]) where Action.State == State {
+        var actions: [Action] = []
+        var states: [State] = [target]
         var node = target
         while let prev = cameFrom[node] {
-            path.append(prev.action)
+            actions.append(prev.action)
+            states.append(prev.predecessor)
             node = prev.predecessor
         }
-        return path.reversed()
+        return (actions.reversed(), states.reversed())
     }
 }
