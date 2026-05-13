@@ -1,5 +1,7 @@
 # SwiftGOAP
 
+[![CI](https://github.com/ultrainfinity/SwiftGOAP/actions/workflows/ci.yml/badge.svg)](https://github.com/ultrainfinity/SwiftGOAP/actions/workflows/ci.yml)
+
 Goal-Oriented Action Planning for Swift. Pure Swift, zero dependencies, cross-platform, Sendable-ready.
 
 ## What is GOAP?
@@ -19,7 +21,9 @@ That means you can change the world, add new actions, or shift the agent's goals
 - **A\* planner** with closed-set optimisation, optimal-cost search, and a configurable expansion cap.
 - **`GOAPPlan` value type** carrying the action sequence, total cost, and the full trajectory of intermediate states.
 - **Type-safe facts.** `BooleanWorldState` accepts any `RawRepresentable` whose `RawValue` is `Int`, so you can use enums instead of magic indices.
-- **Multi-goal support** — the planner picks the highest-priority goal that has a plan.
+- **Multi-goal support** with `.priority` (first-achievable) or `.maxUtility` (best `priority - cost`) selection strategies.
+- **Dynamic action cost.** Override `cost(in: State)` to let action weight depend on the world ("travel to X" varies by distance).
+- **Dynamic action sets.** Pass `actionsFor: (State) -> [Action]` instead of a static array — generate parameterised actions ("go to room R") at planning time.
 
 ## Installation
 
@@ -103,26 +107,38 @@ let plan = planner.plan(from: start, goal: goal, actions: [drinkPotion])
 
 > **Note**: `.add` / `.subtract` require an existing numeric value (`.integer` or `.real`). Applying them to a `.bool` / `.text` fact, or to a missing key, traps with a precondition failure — catch this in development, not in production. Use `.set(.integer(0))` first to initialise a counter.
 
-## Multiple goals, by priority
+## Multiple goals
 
 Give the agent a list of goals; the planner returns the highest-priority one it can reach, together with the matching plan.
 
 ```swift
-let killDragon = GOAPGoal<BooleanWorldState>(
-    name: "killDragon",
-    conditions: BooleanWorldState.facts([(Fact.enemyDead, true)]),
+enum Survival: Int { case fed, armed, enemyDead }
+
+let killEnemy = GOAPGoal<BooleanWorldState>(
+    name: "killEnemy",
+    conditions: BooleanWorldState.facts([(Survival.enemyDead, true)]),
     priority: 10
 )
 let eatFood = GOAPGoal<BooleanWorldState>(
     name: "eatFood",
-    conditions: BooleanWorldState.facts([(Fact.hasGun, true)]),   // toy example
+    conditions: BooleanWorldState.facts([(Survival.fed, true)]),
     priority: 1
 )
 
-if let result = planner.plan(from: start, goals: [killDragon, eatFood], actions: actions) {
+if let result = planner.plan(from: start, goals: [killEnemy, eatFood], actions: actions) {
     print("pursuing \(result.goal.name): \(result.plan.actions.map(\.name))")
-    // → pursuing eatFood: ["pickupGun"]   (dragon goal not reachable from this state)
 }
+```
+
+Default behaviour: try goals in descending priority order and return the first that has a plan. Pass `selectingBy: .maxUtility` to instead pick the goal that maximises `priority - plan.totalCost` — useful when an expensive high-priority goal should defer to a cheap low-priority one:
+
+```swift
+let result = planner.plan(
+    from: start,
+    goals: [killEnemy, eatFood],
+    actions: actions,
+    selectingBy: .maxUtility
+)
 ```
 
 ## Custom action types

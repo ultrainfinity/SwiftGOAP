@@ -29,6 +29,21 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
         goal: State.Conditions,
         actions: [Action]
     ) -> GOAPPlan<Action>? where Action.State == State {
+        plan(from: start, goal: goal, actionsFor: { _ in actions })
+    }
+
+    /// Same as `plan(from:goal:actions:)`, but actions are generated per-state
+    /// by a closure. Use this when the set of applicable actions depends on
+    /// the world — e.g. "go to room X" should yield a different action per
+    /// reachable room, or a long-lived agent might learn new actions over time.
+    ///
+    /// The closure is invoked on every node expansion. Keep it cheap; cache
+    /// inside the closure if your generation logic is expensive.
+    public func plan<Action: GOAPAction>(
+        from start: State,
+        goal: State.Conditions,
+        actionsFor: (State) -> [Action]
+    ) -> GOAPPlan<Action>? where Action.State == State {
         if start.satisfies(goal) {
             return GOAPPlan(actions: [], states: [start])
         }
@@ -61,12 +76,13 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
 
             let currentG = gScore[current] ?? .max
 
-            for action in actions {
+            for action in actionsFor(current) {
                 guard current.satisfies(action.preconditions) else { continue }
-                precondition(action.cost >= 0, "action '\(action.name)' has negative cost")
+                let stepCost = action.cost(in: current)
+                precondition(stepCost >= 0, "action '\(action.name)' has negative cost")
 
                 let next = current.applying(action.effects)
-                let tentativeG = currentG + action.cost
+                let tentativeG = currentG + stepCost
 
                 if tentativeG < (gScore[next] ?? .max) {
                     gScore[next] = tentativeG
@@ -91,22 +107,56 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
         plan(from: start, goal: goal.conditions, actions: actions)
     }
 
-    /// Tries each goal in descending priority order and returns the first
-    /// matched goal together with its plan. Use this when an agent has a list
-    /// of competing goals and should pursue the highest-priority one that is
-    /// currently achievable.
+    /// Convenience overload combining `GOAPGoal` with a dynamic action source.
+    public func plan<Action: GOAPAction>(
+        from start: State,
+        goal: GOAPGoal<State>,
+        actionsFor: (State) -> [Action]
+    ) -> GOAPPlan<Action>? where Action.State == State {
+        plan(from: start, goal: goal.conditions, actionsFor: actionsFor)
+    }
+
+    /// Picks one goal from `goals` and returns it together with a plan that
+    /// satisfies it. The selection rule is controlled by `selectingBy`.
+    ///
+    /// - `.priority` (default): try goals in descending `priority` and return
+    ///   the first that has a plan. Cheap — at most one plan is computed per
+    ///   goal until the first success.
+    /// - `.maxUtility`: compute plans for every goal and return the one
+    ///   maximising `priority - plan.totalCost`. More expensive (`O(goals)`
+    ///   plans), but lets a cheap low-priority goal win over an expensive
+    ///   high-priority one.
     public func plan<Action: GOAPAction>(
         from start: State,
         goals: [GOAPGoal<State>],
-        actions: [Action]
+        actions: [Action],
+        selectingBy strategy: GoalSelectionStrategy = .priority
     ) -> (goal: GOAPGoal<State>, plan: GOAPPlan<Action>)? where Action.State == State {
-        let ordered = goals.sorted { $0.priority > $1.priority }
-        for goal in ordered {
-            if let plan = plan(from: start, goal: goal.conditions, actions: actions) {
-                return (goal, plan)
+        switch strategy {
+        case .priority:
+            let ordered = goals.sorted { $0.priority > $1.priority }
+            for goal in ordered {
+                if let plan = plan(from: start, goal: goal.conditions, actions: actions) {
+                    return (goal, plan)
+                }
             }
+            return nil
+
+        case .maxUtility:
+            var best: (goal: GOAPGoal<State>, plan: GOAPPlan<Action>)? = nil
+            var bestScore: Int = .min
+            for goal in goals {
+                guard let plan = plan(from: start, goal: goal.conditions, actions: actions) else {
+                    continue
+                }
+                let score = goal.priority - plan.totalCost
+                if score > bestScore {
+                    bestScore = score
+                    best = (goal, plan)
+                }
+            }
+            return best
         }
-        return nil
     }
 
     private func reconstruct<Action: GOAPAction>(

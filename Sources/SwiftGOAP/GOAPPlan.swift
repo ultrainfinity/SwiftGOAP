@@ -15,9 +15,15 @@ public struct GOAPPlan<Action: GOAPAction>: Sendable {
     /// equals `actions.count + 1`. For an empty plan, contains the start state.
     public let states: [Action.State]
 
-    /// Sum of the action costs.
+    /// Sum of the action costs, evaluated in the state each action would run
+    /// in. For actions that override `cost(in:)` this respects context; for
+    /// plain actions it matches the sum of static `cost` values.
     public var totalCost: Int {
-        actions.reduce(0) { $0 + $1.cost }
+        var total = 0
+        for (i, action) in actions.enumerated() {
+            total += action.cost(in: states[i])
+        }
+        return total
     }
 
     /// Number of actions in the plan.
