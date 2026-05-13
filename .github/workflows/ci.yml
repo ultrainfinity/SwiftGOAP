@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  macos:
+    name: macOS / Swift 6
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build (debug)
+        run: swift build -v
+
+      - name: Test
+        run: swift test
+
+      - name: Build under strict concurrency
+        run: swift build -Xswiftc -strict-concurrency=complete
+
+      - name: Build (release)
+        run: swift build -c release
+
+  linux:
+    name: Linux / Swift 6
+    runs-on: ubuntu-latest
+    container:
+      image: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build (debug)
+        run: swift build -v
+
+      - name: Test
+        run: swift test --filter "^(?!.*PerformanceTests).*$"
+        # XCTMeasure isn't supported on swift-corelibs-xctest; skip the perf
+        # suite on Linux. Correctness tests still run.
+
+      - name: Build under strict concurrency
+        run: swift build -Xswiftc -strict-concurrency=complete
+
+      - name: Build (release)
+        run: swift build -c release
