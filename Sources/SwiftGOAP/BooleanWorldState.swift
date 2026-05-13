@@ -17,10 +17,13 @@ public struct BooleanWorldState: WorldState, Sendable {
     public typealias Effects = BooleanWorldState
 
     /// Bit values for the represented facts. Bit `i` is the value of fact `i`.
-    public var bits: UInt64
+    /// Read-only externally so the invariant `bits & ~mask == 0` can't be
+    /// broken by direct assignment — go through `init`, `set`, or `clear`.
+    public private(set) var bits: UInt64
     /// Which bits carry meaningful information. Bits outside `mask` are "don't
-    /// care" for satisfaction and "no effect" for application.
-    public var mask: UInt64
+    /// care" for satisfaction and "no effect" for application. Read-only
+    /// externally for the same reason as `bits`.
+    public private(set) var mask: UInt64
 
     public init(bits: UInt64 = 0, mask: UInt64 = 0) {
         // Enforce invariant: bits set outside mask are meaningless and would

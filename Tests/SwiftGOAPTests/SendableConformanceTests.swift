@@ -18,6 +18,8 @@ final class SendableConformanceTests: XCTestCase {
         requireSendable(GOAPPlanner<RichWorldState>.self)
         requireSendable(BasicAction<BooleanWorldState>.self)
         requireSendable(BasicAction<RichWorldState>.self)
+        requireSendable(GOAPPlan<BasicAction<BooleanWorldState>>.self)
+        requireSendable(GOAPPlan<BasicAction<RichWorldState>>.self)
         requireSendable(PriorityQueue<Int>.self)
     }
 

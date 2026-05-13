@@ -349,6 +349,146 @@ final class GOAPPlannerTests: XCTestCase {
         let plan = planner.plan(from: start, goal: goal, actions: [pickup, load, shoot])
         XCTAssertEqual(plan?.actions.map(\.name), ["pickup", "load", "shoot"])
         XCTAssertEqual(plan?.states.last?.get(Fact.enemyDead), true)
+
+        // clear<F> overload makes the fact "don't care" again.
+        var s = start
+        s.set(Fact.enemyDead, to: true)
+        XCTAssertEqual(s.get(Fact.enemyDead), true)
+        s.clear(Fact.enemyDead)
+        XCTAssertNil(s.get(Fact.enemyDead))
+    }
+
+    // MARK: - Dynamic cost via cost(in:)
+
+    func testDynamicCostOverride() {
+        // Action whose cost depends on a fact: cheap when fact 0 is true,
+        // expensive when false.
+        struct ConditionalCostAction: GOAPAction {
+            typealias State = BooleanWorldState
+            let name: String
+            let cost: Int
+            let preconditions: BooleanWorldState
+            let effects: BooleanWorldState
+            func cost(in state: BooleanWorldState) -> Int {
+                state.get(0) == true ? 1 : 10
+            }
+        }
+
+        let act = ConditionalCostAction(
+            name: "act",
+            cost: 5,    // static fallback, never used
+            preconditions: BooleanWorldState(),
+            effects: BooleanWorldState.facts([(1, true)])
+        )
+
+        // Run #1: fact 0 = true → stepCost = 1.
+        let planner = GOAPPlanner<BooleanWorldState>()
+        let cheap = planner.plan(
+            from: BooleanWorldState.facts([(0, true)]),
+            goal: BooleanWorldState.facts([(1, true)]),
+            actions: [act]
+        )
+        XCTAssertEqual(cheap?.totalCost, 1)
+
+        // Run #2: fact 0 = false → stepCost = 10.
+        let expensive = planner.plan(
+            from: BooleanWorldState.facts([(0, false)]),
+            goal: BooleanWorldState.facts([(1, true)]),
+            actions: [act]
+        )
+        XCTAssertEqual(expensive?.totalCost, 10)
+    }
+
+    // MARK: - Utility-based multi-goal
+
+    func testMaxUtilityPicksCheapGoalOverExpensiveHighPriority() {
+        // Two goals:
+        //   killBoss  — priority 100, but plan cost is 50  → utility = 50
+        //   getFood   — priority 10,  plan cost is 1       → utility = 9
+        // With .priority, killBoss wins; with .maxUtility, killBoss still wins.
+        // Now make killBoss expensive enough that getFood wins on utility:
+        //   killBoss  — priority 10,  plan cost is 50      → utility = -40
+        //   getFood   — priority 5,   plan cost is 1       → utility = 4
+        let killBossActions = (0..<50).map { i in
+            BasicAction<BooleanWorldState>(
+                name: "boss\(i)",
+                cost: 1,
+                preconditions: i == 0 ? BooleanWorldState() : BooleanWorldState.facts([(i, true)]),
+                effects: BooleanWorldState.facts([(i + 1, true)])
+            )
+        }
+        let getFood = BasicAction<BooleanWorldState>(
+            name: "getFood",
+            cost: 1,
+            preconditions: BooleanWorldState(),
+            effects: BooleanWorldState.facts([(60, true)])
+        )
+
+        let start = BooleanWorldState.facts([(0, false)])
+
+        let bossGoal = GOAPGoal<BooleanWorldState>(
+            name: "killBoss",
+            conditions: BooleanWorldState.facts([(50, true)]),
+            priority: 10
+        )
+        let foodGoal = GOAPGoal<BooleanWorldState>(
+            name: "getFood",
+            conditions: BooleanWorldState.facts([(60, true)]),
+            priority: 5
+        )
+
+        let planner = GOAPPlanner<BooleanWorldState>()
+        let allActions = killBossActions + [getFood]
+
+        // .priority: boss wins because it has a plan (any plan).
+        let byPriority = planner.plan(from: start, goals: [bossGoal, foodGoal], actions: allActions)
+        XCTAssertEqual(byPriority?.goal.name, "killBoss")
+
+        // .maxUtility: food wins because 5 - 1 = 4 > 10 - 50 = -40.
+        let byUtility = planner.plan(
+            from: start,
+            goals: [bossGoal, foodGoal],
+            actions: allActions,
+            selectingBy: .maxUtility
+        )
+        XCTAssertEqual(byUtility?.goal.name, "getFood")
+        XCTAssertEqual(byUtility?.plan.totalCost, 1)
+    }
+
+    // MARK: - Dynamic action generator (actionsFor: closure)
+
+    func testActionsForClosureGeneratesActionsPerState() {
+        // Generate a different action depending on whether fact 0 is set:
+        //   - fact 0 false → action "unlock" that sets fact 0
+        //   - fact 0 true  → action "advance" that sets fact 1
+        let planner = GOAPPlanner<BooleanWorldState>()
+        let start = BooleanWorldState.facts([(0, false), (1, false)])
+        let goal = BooleanWorldState.facts([(1, true)])
+
+        var unlockCount = 0
+        var advanceCount = 0
+
+        let plan = planner.plan(from: start, goal: goal) { (state: BooleanWorldState) -> [BasicAction<BooleanWorldState>] in
+            if state.get(0) == true {
+                advanceCount += 1
+                return [BasicAction(
+                    name: "advance",
+                    preconditions: BooleanWorldState.facts([(0, true)]),
+                    effects: BooleanWorldState.facts([(1, true)])
+                )]
+            } else {
+                unlockCount += 1
+                return [BasicAction(
+                    name: "unlock",
+                    preconditions: BooleanWorldState.facts([(0, false)]),
+                    effects: BooleanWorldState.facts([(0, true)])
+                )]
+            }
+        }
+
+        XCTAssertEqual(plan?.actions.map(\.name), ["unlock", "advance"])
+        XCTAssertGreaterThan(unlockCount, 0)
+        XCTAssertGreaterThan(advanceCount, 0)
     }
 
     // MARK: - maxNodes guard
