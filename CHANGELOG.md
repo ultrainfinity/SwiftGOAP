@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- New `Benchmarks` executable target with a self-contained harness (no external deps) comparing `BooleanWorldState` vs `RichWorldState` on primitive operations (`satisfies`, `applying`, `heuristicDistance`, hash + Set insert) and end-to-end planning across three scenarios (F.E.A.R.-style 3-step plan, 10-step chain, 30-action wide-shallow). Run with `swift run -c release Benchmarks`. Apple Silicon baseline numbers committed to README.
+
 ## [0.1.0] — 2026-05-14
 
 First public release. The first open-source GOAP (Goal-Oriented Action Planning) library for Swift.

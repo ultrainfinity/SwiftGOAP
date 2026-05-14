@@ -186,6 +186,29 @@ When the world drifts (a door closes, ammo is taken), drop the plan and re-plan 
 - The `GOAPPlanner.maxNodes` cap (default 10,000) protects against runaway searches if your action set has bad cycles or your heuristic is too weak.
 - The default heuristic counts unsatisfied facts. It is fast and produces sensible plans, but is not strictly admissible when one action satisfies multiple facts at once. In rare cases the returned plan may be one action longer than truly optimal — the standard GOAP trade-off.
 
+## Benchmarks
+
+Run with `swift run -c release Benchmarks`. Compares `BooleanWorldState` vs `RichWorldState` on primitive ops and end-to-end planning. The harness has no external dependencies — pure Swift, best-of-7 samples per benchmark, ~50 ms measurement window.
+
+Apple Silicon (M-series, macOS 26.3, Swift 6.2, release):
+
+| Operation                          | BooleanWorldState | RichWorldState | Slowdown |
+| ---------------------------------- | ----------------: | -------------: | -------: |
+| `satisfies` (2 facts)              |             10 ns |          91 ns |     9.4× |
+| `applying` (2 effects)             |             10 ns |         177 ns |    18.3× |
+| `heuristicDistance` (4 conditions) |             10 ns |         152 ns |    15.8× |
+| Hash + Set insert                  |            145 ns |         361 ns |     2.5× |
+| F.E.A.R. plan (3 steps)            |           7.62 µs |        15.92 µs |    2.1× |
+| Chain plan (10 steps)              |          26.09 µs |        71.85 µs |    2.8× |
+| Wide-shallow (30 candidate actions)|          22.46 µs |        45.74 µs |    2.0× |
+
+The two takeaways:
+
+1. **Both world types are fast in absolute terms.** Even RichWorldState plans a 10-step chain in ~70 µs — comfortably within a single game frame at 60fps.
+2. **BooleanWorldState is dramatically faster on primitives (8–18×) but only ~2–3× faster on end-to-end plans** — because A\*'s overhead in dictionary lookups, frontier management, and reconstruction dominates the per-operation difference once you string many operations together.
+
+Pick `BooleanWorldState` when your facts are all boolean and you have many agents replanning per frame. Pick `RichWorldState` when you need numeric state (health, ammo, resource counts) or when the set of facts changes at runtime. Don't avoid `RichWorldState` for performance reasons unless you've measured.
+
 ## Why this exists
 
 There are GOAP implementations in C (stolk/GPGOAP), C++, C# (mountain-goap), Go, Rust, and Python — but until now, none in Swift. This package fills that gap with an idiomatic, dependency-free, Sendable-ready Swift API that works in games, simulations, and any other agent-based system.
