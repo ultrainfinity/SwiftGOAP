@@ -30,6 +30,14 @@ let package = Package(
             name: "SwiftGOAPTests",
             dependencies: ["SwiftGOAP"],
             path: "Tests/SwiftGOAPTests"
+        ),
+        // Benchmark suite — run with `swift run -c release Benchmarks`.
+        // Compares BooleanWorldState vs RichWorldState on primitive ops and
+        // end-to-end planning. Not built by default; explicit target.
+        .executableTarget(
+            name: "Benchmarks",
+            dependencies: ["SwiftGOAP"],
+            path: "Benchmarks"
         )
     ]
 )
