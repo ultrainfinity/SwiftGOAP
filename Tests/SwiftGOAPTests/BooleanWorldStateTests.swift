@@ -78,4 +78,21 @@ final class BooleanWorldStateTests: XCTestCase {
         let cond = BooleanWorldState.facts([(0, true)])
         XCTAssertEqual(s.heuristicDistance(to: cond), 0)
     }
+
+    // MARK: - Invariant: bits & ~mask == 0
+
+    func testRawConstructorClampsBitsToMask() {
+        let s = BooleanWorldState(bits: 0xFF, mask: 0x0F)
+        XCTAssertEqual(s.bits, 0x0F, "bits outside mask must be cleared on construction")
+        XCTAssertEqual(s.mask, 0x0F)
+    }
+
+    func testRawConstructorPreventsPhantomBitSatisfaction() {
+        // Without the invariant, a state with bits=0xFF, mask=0x0F could be
+        // tricked into satisfying a condition asking for bit 4 = true, even
+        // though bit 4 is semantically "don't care" in that state.
+        let phantom = BooleanWorldState(bits: 0xFF, mask: 0x0F)
+        let cond = BooleanWorldState.facts([(4, true)])
+        XCTAssertFalse(phantom.satisfies(cond), "phantom bits must not satisfy real conditions")
+    }
 }

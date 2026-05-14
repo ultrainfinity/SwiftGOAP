@@ -92,4 +92,24 @@ final class RichWorldStateTests: XCTestCase {
         XCTAssertEqual(s.values["ratio"], .real(0.5))
         XCTAssertEqual(s.values["name"], .text("spam"))
     }
+
+    // MARK: - Numeric effects must be applied to numeric facts only
+
+    func testAddRequiresNumericFact() {
+        // Positive case: integer fact, .add stays valid.
+        let s1 = RichWorldState(["x": 5])
+        XCTAssertEqual(s1.applying(["x": .add(3)]).values["x"], .integer(8))
+
+        // Positive case: .set first, .add second works (the documented pattern
+        // for initializing-then-incrementing).
+        let s2 = RichWorldState([:])
+            .applying(["x": .set(.integer(0))])
+            .applying(["x": .add(7)])
+        XCTAssertEqual(s2.values["x"], .integer(7))
+
+        // Negative cases trigger preconditionFailure and aren't testable in
+        // XCTest without subprocess tricks. The contract: .add/.subtract on a
+        // missing key or on a .bool/.text fact traps. Documented in
+        // StateEffect's docstring.
+    }
 }

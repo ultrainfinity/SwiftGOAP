@@ -5,20 +5,30 @@
 /// outside `mask` are "don't care" — useful for partial conditions and partial
 /// effects. A fully-defined state has `mask` set on every relevant bit.
 ///
+/// The type maintains the invariant `bits & ~mask == 0`: a bit cannot be
+/// "true" if it's outside the mask. Direct construction sanitizes the inputs
+/// to preserve this; otherwise satisfaction checks could be fooled by phantom
+/// bits with no semantic value.
+///
 /// Use this state type when speed matters and the world's facts are all
 /// boolean. All comparisons and updates run in O(1) on a single 64-bit word.
-public struct BooleanWorldState: WorldState {
+public struct BooleanWorldState: WorldState, Sendable {
     public typealias Conditions = BooleanWorldState
     public typealias Effects = BooleanWorldState
 
     /// Bit values for the represented facts. Bit `i` is the value of fact `i`.
-    public var bits: UInt64
+    /// Read-only externally so the invariant `bits & ~mask == 0` can't be
+    /// broken by direct assignment — go through `init`, `set`, or `clear`.
+    public private(set) var bits: UInt64
     /// Which bits carry meaningful information. Bits outside `mask` are "don't
-    /// care" for satisfaction and "no effect" for application.
-    public var mask: UInt64
+    /// care" for satisfaction and "no effect" for application. Read-only
+    /// externally for the same reason as `bits`.
+    public private(set) var mask: UInt64
 
     public init(bits: UInt64 = 0, mask: UInt64 = 0) {
-        self.bits = bits
+        // Enforce invariant: bits set outside mask are meaningless and would
+        // make `satisfies` produce wrong answers, so we drop them on the way in.
+        self.bits = bits & mask
         self.mask = mask
     }
 
@@ -46,15 +56,12 @@ public struct BooleanWorldState: WorldState {
         return (bits & bit) != 0
     }
 
-    /// Convenience: build a fully-defined state from a list of `(index, value)`
-    /// pairs. Any bit not in the list defaults to `false` and is left
-    /// "don't care" — pass `fullyDefined: true` if you want every bit marked.
-    public static func facts(_ pairs: [(Int, Bool)], fullyDefined: Bool = false) -> BooleanWorldState {
+    /// Builds a state from a list of `(index, value)` pairs. Bits not in the
+    /// list are left "don't care". For closed-world semantics where every
+    /// unspecified bit means `false`, set `mask = .max` directly on the result.
+    public static func facts(_ pairs: [(Int, Bool)]) -> BooleanWorldState {
         var s = BooleanWorldState()
         for (i, v) in pairs { s.set(i, to: v) }
-        if fullyDefined {
-            s.mask = .max
-        }
         return s
     }
 
@@ -74,5 +81,38 @@ public struct BooleanWorldState: WorldState {
         let care = conditions.mask
         let diff = (bits ^ conditions.bits) & care
         return diff.nonzeroBitCount
+    }
+}
+
+// MARK: - Type-safe fact enums
+
+/// Convenience overloads that accept any `RawRepresentable` whose `RawValue`
+/// is `Int`. This lets you define facts as an enum and avoid magic indices:
+///
+/// ```swift
+/// enum Fact: Int { case hasGun, gunLoaded, enemyDead }
+/// var s = BooleanWorldState.facts([(Fact.hasGun, true), (.gunLoaded, false)])
+/// s.set(.enemyDead, to: false)
+/// s.get(.hasGun)        // → Optional(true)
+/// ```
+extension BooleanWorldState {
+    public static func facts<F: RawRepresentable>(_ pairs: [(F, Bool)]) -> BooleanWorldState
+    where F.RawValue == Int {
+        facts(pairs.map { ($0.0.rawValue, $0.1) })
+    }
+
+    public mutating func set<F: RawRepresentable>(_ fact: F, to value: Bool)
+    where F.RawValue == Int {
+        set(fact.rawValue, to: value)
+    }
+
+    public mutating func clear<F: RawRepresentable>(_ fact: F)
+    where F.RawValue == Int {
+        clear(fact.rawValue)
+    }
+
+    public func get<F: RawRepresentable>(_ fact: F) -> Bool?
+    where F.RawValue == Int {
+        get(fact.rawValue)
     }
 }

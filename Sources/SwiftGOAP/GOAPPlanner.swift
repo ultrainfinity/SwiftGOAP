@@ -10,7 +10,7 @@
 /// when one action can resolve multiple facts at once. In that case A* may
 /// return a non-optimal plan; for typical game scenarios this is the standard
 /// trade-off and the resulting plans are still sensible.
-public struct GOAPPlanner<State: WorldState> {
+public struct GOAPPlanner<State: WorldState>: Sendable {
     /// Cap on the number of states expanded before the planner gives up. This
     /// prevents pathological search trees from running forever.
     public var maxNodes: Int
@@ -20,17 +20,40 @@ public struct GOAPPlanner<State: WorldState> {
     }
 
     /// The cheapest plan from `start` that satisfies `goal`, or `nil` if no
-    /// plan exists within `maxNodes` expansions. An empty array means the
-    /// start state already satisfies the goal.
+    /// plan exists within `maxNodes` expansions. The returned `GOAPPlan`
+    /// contains both the action sequence and the trajectory of intermediate
+    /// states. An empty plan (`isEmpty == true`) means the start state already
+    /// satisfies the goal.
     public func plan<Action: GOAPAction>(
         from start: State,
         goal: State.Conditions,
         actions: [Action]
-    ) -> [Action]? where Action.State == State {
-        if start.satisfies(goal) { return [] }
+    ) -> GOAPPlan<Action>? where Action.State == State {
+        plan(from: start, goal: goal, actionsFor: { _ in actions })
+    }
+
+    /// Same as `plan(from:goal:actions:)`, but actions are generated per-state
+    /// by a closure. Use this when the set of applicable actions depends on
+    /// the world — e.g. "go to room X" should yield a different action per
+    /// reachable room, or a long-lived agent might learn new actions over time.
+    ///
+    /// The closure is invoked on every node expansion. Keep it cheap; cache
+    /// inside the closure if your generation logic is expensive.
+    public func plan<Action: GOAPAction>(
+        from start: State,
+        goal: State.Conditions,
+        actionsFor: (State) -> [Action]
+    ) -> GOAPPlan<Action>? where Action.State == State {
+        if start.satisfies(goal) {
+            return GOAPPlan(actions: [], states: [start])
+        }
 
         var gScore: [State: Int] = [start: 0]
         var cameFrom: [State: (predecessor: State, action: Action)] = [:]
+        // Set of states already finalized via dequeue. A state can be reopened
+        // if a successor relaxation later finds a strictly cheaper path to it,
+        // which preserves correctness when the heuristic is inadmissible.
+        var closed: Set<State> = []
 
         var frontier = PriorityQueue<State>()
         frontier.enqueue(start, priority: start.heuristicDistance(to: goal))
@@ -38,8 +61,14 @@ public struct GOAPPlanner<State: WorldState> {
         var expansions = 0
 
         while let current = frontier.dequeue() {
+            // Stale frontier entries get skipped here — we already finalized
+            // this state (or a strictly cheaper path to it) on a prior dequeue.
+            if closed.contains(current) { continue }
+            closed.insert(current)
+
             if current.satisfies(goal) {
-                return reconstruct(target: current, cameFrom: cameFrom)
+                let (acts, states) = reconstruct(target: current, cameFrom: cameFrom)
+                return GOAPPlan(actions: acts, states: states)
             }
 
             expansions += 1
@@ -47,16 +76,19 @@ public struct GOAPPlanner<State: WorldState> {
 
             let currentG = gScore[current] ?? .max
 
-            for action in actions {
+            for action in actionsFor(current) {
                 guard current.satisfies(action.preconditions) else { continue }
-                precondition(action.cost >= 0, "action '\(action.name)' has negative cost")
+                let stepCost = action.cost(in: current)
+                precondition(stepCost >= 0, "action '\(action.name)' has negative cost")
 
                 let next = current.applying(action.effects)
-                let tentativeG = currentG + action.cost
+                let tentativeG = currentG + stepCost
 
                 if tentativeG < (gScore[next] ?? .max) {
                     gScore[next] = tentativeG
                     cameFrom[next] = (current, action)
+                    // Reopen if we previously closed this state at a worse g.
+                    closed.remove(next)
                     let f = tentativeG + next.heuristicDistance(to: goal)
                     frontier.enqueue(next, priority: f)
                 }
@@ -71,38 +103,74 @@ public struct GOAPPlanner<State: WorldState> {
         from start: State,
         goal: GOAPGoal<State>,
         actions: [Action]
-    ) -> [Action]? where Action.State == State {
+    ) -> GOAPPlan<Action>? where Action.State == State {
         plan(from: start, goal: goal.conditions, actions: actions)
     }
 
-    /// Tries each goal in descending priority order and returns the first
-    /// matched goal together with its plan. Use this when an agent has a list
-    /// of competing goals and should pursue the highest-priority one that is
-    /// currently achievable.
+    /// Convenience overload combining `GOAPGoal` with a dynamic action source.
+    public func plan<Action: GOAPAction>(
+        from start: State,
+        goal: GOAPGoal<State>,
+        actionsFor: (State) -> [Action]
+    ) -> GOAPPlan<Action>? where Action.State == State {
+        plan(from: start, goal: goal.conditions, actionsFor: actionsFor)
+    }
+
+    /// Picks one goal from `goals` and returns it together with a plan that
+    /// satisfies it. The selection rule is controlled by `selectingBy`.
+    ///
+    /// - `.priority` (default): try goals in descending `priority` and return
+    ///   the first that has a plan. Cheap — at most one plan is computed per
+    ///   goal until the first success.
+    /// - `.maxUtility`: compute plans for every goal and return the one
+    ///   maximising `priority - plan.totalCost`. More expensive (`O(goals)`
+    ///   plans), but lets a cheap low-priority goal win over an expensive
+    ///   high-priority one.
     public func plan<Action: GOAPAction>(
         from start: State,
         goals: [GOAPGoal<State>],
-        actions: [Action]
-    ) -> (goal: GOAPGoal<State>, plan: [Action])? where Action.State == State {
-        let ordered = goals.sorted { $0.priority > $1.priority }
-        for goal in ordered {
-            if let plan = plan(from: start, goal: goal.conditions, actions: actions) {
-                return (goal, plan)
+        actions: [Action],
+        selectingBy strategy: GoalSelectionStrategy = .priority
+    ) -> (goal: GOAPGoal<State>, plan: GOAPPlan<Action>)? where Action.State == State {
+        switch strategy {
+        case .priority:
+            let ordered = goals.sorted { $0.priority > $1.priority }
+            for goal in ordered {
+                if let plan = plan(from: start, goal: goal.conditions, actions: actions) {
+                    return (goal, plan)
+                }
             }
+            return nil
+
+        case .maxUtility:
+            var best: (goal: GOAPGoal<State>, plan: GOAPPlan<Action>)? = nil
+            var bestScore: Int = .min
+            for goal in goals {
+                guard let plan = plan(from: start, goal: goal.conditions, actions: actions) else {
+                    continue
+                }
+                let score = goal.priority - plan.totalCost
+                if score > bestScore {
+                    bestScore = score
+                    best = (goal, plan)
+                }
+            }
+            return best
         }
-        return nil
     }
 
     private func reconstruct<Action: GOAPAction>(
         target: State,
         cameFrom: [State: (predecessor: State, action: Action)]
-    ) -> [Action] where Action.State == State {
-        var path: [Action] = []
+    ) -> (actions: [Action], states: [State]) where Action.State == State {
+        var actions: [Action] = []
+        var states: [State] = [target]
         var node = target
         while let prev = cameFrom[node] {
-            path.append(prev.action)
+            actions.append(prev.action)
+            states.append(prev.predecessor)
             node = prev.predecessor
         }
-        return path.reversed()
+        return (actions.reversed(), states.reversed())
     }
 }
