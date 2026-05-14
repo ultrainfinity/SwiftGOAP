@@ -1,0 +1,67 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only one deploy at a time; cancel the older one if a new push lands.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build DocC
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Generate documentation
+        run: |
+          swift package --allow-writing-to-directory ./docs \
+            generate-documentation \
+            --target SwiftGOAP \
+            --output-path ./docs \
+            --hosting-base-path SwiftGOAP \
+            --transform-for-static-hosting
+
+      - name: Add redirect from root to documentation index
+        # DocC publishes under /documentation/swiftgoap/. Without this redirect,
+        # https://USER.github.io/SwiftGOAP/ shows GitHub's default 404.
+        run: |
+          cat > docs/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>SwiftGOAP</title>
+          <meta http-equiv="refresh" content="0; url=./documentation/swiftgoap/">
+          <link rel="canonical" href="./documentation/swiftgoap/">
+          HTML
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
