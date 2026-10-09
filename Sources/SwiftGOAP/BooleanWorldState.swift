@@ -77,6 +77,10 @@ public struct BooleanWorldState: WorldState, Sendable {
         return BooleanWorldState(bits: newBits, mask: newMask)
     }
 
+    public func conditions(pinning effects: BooleanWorldState) -> BooleanWorldState {
+        BooleanWorldState(bits: bits & effects.mask, mask: effects.mask)
+    }
+
     public func heuristicDistance(to conditions: BooleanWorldState) -> Int {
         let care = conditions.mask
         let diff = (bits ^ conditions.bits) & care

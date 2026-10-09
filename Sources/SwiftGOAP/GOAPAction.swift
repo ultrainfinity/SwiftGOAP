@@ -46,3 +46,117 @@ public struct BasicAction<State: WorldState>: GOAPAction, Sendable {
         self.effects = effects
     }
 }
+
+/// An action that is also a planner over actions of its own.
+///
+/// At the level that contains it, a composite action is an ordinary action:
+/// the planner sequences it by its `preconditions`, `effects` and `cost`.
+/// When execution reaches it, it is expanded — a sub-plan is searched over
+/// `subActions(in:)` from the state the agent is actually in, aiming at
+/// `subGoal(from:)`. Sub-actions may themselves be composite, to any depth.
+///
+/// The declared `effects` are a promise, not a recipe: the sub-plan is free to
+/// reach the goal by any route, and the state it ends in replaces the state
+/// the declaration predicted.
+public protocol GOAPCompositeAction: GOAPAction {
+    associatedtype SubAction: GOAPAction where SubAction.State == State
+
+    /// Actions available to the sub-plan when expanding from `state`.
+    func subActions(in state: State) -> [SubAction]
+
+    /// Goal of the sub-plan when the composite starts in `state`. Defaults to
+    /// the composite's `effects`, pinned to the values they produce in `state`.
+    func subGoal(from state: State) -> State.Conditions
+}
+
+extension GOAPCompositeAction {
+    public func subGoal(from state: State) -> State.Conditions {
+        state.applying(effects).conditions(pinning: effects)
+    }
+}
+
+/// A concrete `GOAPCompositeAction` whose sub-actions are fixed. Its children
+/// are `GOAPTask`s, so a sub-planner can hold primitives and further
+/// sub-planners side by side.
+public struct GOAPSubPlanner<Primitive: GOAPAction>: GOAPCompositeAction, Sendable {
+    public typealias State = Primitive.State
+    public typealias SubAction = GOAPTask<Primitive>
+
+    public let name: String
+    public let cost: Int
+    public let preconditions: State.Conditions
+    public let effects: State.Effects
+    /// The actions the sub-plan chooses from, whatever state it starts in.
+    public let children: [GOAPTask<Primitive>]
+    private let customSubGoal: (@Sendable (State) -> State.Conditions)?
+
+    /// Creates a sub-planner. Pass `subGoal` to compute the sub-plan's goal
+    /// from the starting state; otherwise the goal is the pinned `effects`.
+    public init(
+        name: String,
+        cost: Int = 1,
+        preconditions: State.Conditions,
+        effects: State.Effects,
+        children: [GOAPTask<Primitive>],
+        subGoal: (@Sendable (State) -> State.Conditions)? = nil
+    ) {
+        self.name = name
+        self.cost = cost
+        self.preconditions = preconditions
+        self.effects = effects
+        self.children = children
+        self.customSubGoal = subGoal
+    }
+
+    public func subActions(in state: State) -> [GOAPTask<Primitive>] { children }
+
+    public func subGoal(from state: State) -> State.Conditions {
+        if let customSubGoal { return customSubGoal(state) }
+        return state.applying(effects).conditions(pinning: effects)
+    }
+}
+
+/// A node of a hierarchical action set: either an executable `Primitive` or a
+/// `GOAPSubPlanner` that expands into more tasks. Every task is a `GOAPAction`,
+/// so primitives and sub-planners can be planned over together.
+public enum GOAPTask<Primitive: GOAPAction>: GOAPAction, Sendable {
+    public typealias State = Primitive.State
+
+    case primitive(Primitive)
+    case subPlanner(GOAPSubPlanner<Primitive>)
+
+    public var name: String {
+        switch self {
+        case .primitive(let action):  return action.name
+        case .subPlanner(let planner): return planner.name
+        }
+    }
+
+    public var cost: Int {
+        switch self {
+        case .primitive(let action):  return action.cost
+        case .subPlanner(let planner): return planner.cost
+        }
+    }
+
+    public var preconditions: State.Conditions {
+        switch self {
+        case .primitive(let action):  return action.preconditions
+        case .subPlanner(let planner): return planner.preconditions
+        }
+    }
+
+    public var effects: State.Effects {
+        switch self {
+        case .primitive(let action):  return action.effects
+        case .subPlanner(let planner): return planner.effects
+        }
+    }
+
+    public func cost(in state: State) -> Int {
+        switch self {
+        case .primitive(let action):  return action.cost(in: state)
+        case .subPlanner(let planner): return planner.cost(in: state)
+        }
+    }
+}

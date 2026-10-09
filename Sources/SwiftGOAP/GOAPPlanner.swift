@@ -159,6 +159,118 @@ public struct GOAPPlanner<State: WorldState>: Sendable {
         }
     }
 
+    /// The plan that carries out `composite` when execution reaches it in
+    /// `state`, or `nil` if its sub-actions cannot reach its sub-goal. This is
+    /// a plan over the composite's own `subActions(in:)`, towards
+    /// `subGoal(from:)`.
+    ///
+    /// Use this for lazy refinement: plan the top level with the composite as
+    /// an ordinary action, then call `refine` on each composite when the
+    /// agent arrives at it, so the sub-plan starts from the real world.
+    public func refine<Composite: GOAPCompositeAction>(
+        _ composite: Composite,
+        from state: State
+    ) -> GOAPPlan<Composite.SubAction>? where Composite.State == State {
+        plan(
+            from: state,
+            goal: composite.subGoal(from: state),
+            actionsFor: { composite.subActions(in: $0) }
+        )
+    }
+
+    /// Plans over `tasks` and expands every sub-planner in the result, all the
+    /// way down, before returning.
+    ///
+    /// Each level is planned with its sub-planners as ordinary actions, using
+    /// their declared preconditions, effects and cost. The steps are then
+    /// walked in the state the agent would actually be in: a sub-planner is
+    /// expanded from that state towards `subGoal(from:)`, and the state its
+    /// sub-plan reaches carries on to the next step. A level is rejected with
+    /// `.inconsistent` if that state breaks the next step's preconditions or
+    /// the level's goal. Nothing is replanned automatically, so the result is
+    /// deterministic; for worlds that change as the agent acts, plan the top
+    /// level and use `refine` as execution reaches each sub-planner.
+    ///
+    /// `maxDepth` is the deepest level an expansion may reach; the top level
+    /// is 0, so `maxDepth: 0` allows no expansion at all.
+    public func planHierarchically<Primitive: GOAPAction>(
+        from start: State,
+        goal: State.Conditions,
+        tasks: [GOAPTask<Primitive>],
+        maxDepth: Int = 16
+    ) -> Result<GOAPHierarchicalPlan<Primitive>, GOAPHierarchyError>
+    where Primitive.State == State {
+        planLevel(
+            from: start,
+            goal: goal,
+            tasks: tasks,
+            owner: nil,
+            depth: 0,
+            maxDepth: maxDepth
+        )
+    }
+
+    /// Plans one level of a hierarchy and expands its sub-planners. `owner` is
+    /// the sub-planner this level belongs to, or `nil` at the top.
+    private func planLevel<Primitive: GOAPAction>(
+        from start: State,
+        goal: State.Conditions,
+        tasks: [GOAPTask<Primitive>],
+        owner: String?,
+        depth: Int,
+        maxDepth: Int
+    ) -> Result<GOAPHierarchicalPlan<Primitive>, GOAPHierarchyError>
+    where Primitive.State == State {
+        guard let levelPlan = plan(from: start, goal: goal, actions: tasks) else {
+            if let owner {
+                return .failure(.refinementFailed(subPlanner: owner, depth: depth))
+            }
+            return .failure(.noPlan)
+        }
+
+        var steps: [GOAPHierarchicalPlan<Primitive>.Step] = []
+        var states: [State] = [start]
+        var actual = start
+        var lastExpanded = ""
+
+        for task in levelPlan.actions {
+            guard actual.satisfies(task.preconditions) else {
+                return .failure(.inconsistent(after: lastExpanded, depth: depth))
+            }
+            switch task {
+            case .primitive(let action):
+                actual = actual.applying(action.effects)
+                steps.append(.primitive(action))
+            case .subPlanner(let subPlanner):
+                guard depth + 1 <= maxDepth else {
+                    return .failure(.depthExceeded(subPlanner: subPlanner.name))
+                }
+                let result = planLevel(
+                    from: actual,
+                    goal: subPlanner.subGoal(from: actual),
+                    tasks: subPlanner.subActions(in: actual),
+                    owner: subPlanner.name,
+                    depth: depth + 1,
+                    maxDepth: maxDepth
+                )
+                switch result {
+                case .success(let subPlan):
+                    actual = subPlan.states[subPlan.states.count - 1]
+                    steps.append(.subPlan(subPlanner, subPlan))
+                    lastExpanded = subPlanner.name
+                case .failure(let error):
+                    return .failure(error)
+                }
+            }
+            states.append(actual)
+        }
+
+        guard actual.satisfies(goal) else {
+            return .failure(.inconsistent(after: lastExpanded, depth: depth))
+        }
+        return .success(GOAPHierarchicalPlan(steps: steps, states: states))
+    }
+
     private func reconstruct<Action: GOAPAction>(
         target: State,
         cameFrom: [State: (predecessor: State, action: Action)]

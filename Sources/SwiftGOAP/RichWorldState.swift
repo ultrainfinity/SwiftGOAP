@@ -98,6 +98,22 @@ public struct RichWorldState: WorldState, Sendable {
         return RichWorldState(next)
     }
 
+    /// Pins each fact named by `effects` to its current value with `.equals`.
+    /// Traps if a named fact is missing — there is no value to pin it to.
+    public func conditions(pinning effects: [String: StateEffect]) -> [String: StateCondition] {
+        var pinned: [String: StateCondition] = [:]
+        for key in effects.keys {
+            guard let value = values[key] else {
+                preconditionFailure(
+                    "RichWorldState: cannot pin missing fact '\(key)'. " +
+                    "Initialize it with .set before pinning an effect on it."
+                )
+            }
+            pinned[key] = .equals(value)
+        }
+        return pinned
+    }
+
     public func heuristicDistance(to conditions: [String: StateCondition]) -> Int {
         var unsatisfied = 0
         for (key, condition) in conditions {
