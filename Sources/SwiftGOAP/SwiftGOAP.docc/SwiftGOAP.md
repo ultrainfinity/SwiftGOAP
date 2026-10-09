@@ -8,6 +8,8 @@ SwiftGOAP is an implementation of the GOAP (Goal-Oriented Action Planning) algor
 
 You change the world, add new actions, or shift the agent's goals, and behaviour adapts. No hand-authored finite-state machine.
 
+Composite actions extend the same model to whole hierarchies: a `GOAPSubPlanner` is a single action to the level that contains it and a planner over its own children beneath it. `planHierarchically(from:goal:tasks:maxDepth:)` expands every sub-plan up front; `refine(_:from:)` defers each expansion until execution reaches it. See <doc:HierarchicalPlanning>.
+
 ## Quick start
 
 ```swift
@@ -50,6 +52,15 @@ The returned ``GOAPPlan`` carries the action sequence, total cost, and the traje
 - ``GOAPPlan``
 - ``GOAPPlanner``
 - ``GoalSelectionStrategy``
+
+### Hierarchical planning
+
+- ``GOAPCompositeAction``
+- ``GOAPSubPlanner``
+- ``GOAPTask``
+- ``GOAPHierarchicalPlan``
+- ``GOAPHierarchyError``
+- <doc:HierarchicalPlanning>
 
 ### Supporting
 

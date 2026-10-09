@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Hierarchical planning types: `GOAPCompositeAction` / `GOAPSubPlanner` / `GOAPTask`. A composite is an ordinary action to the level that contains it and a planner over its own children when execution reaches it; the sub-plan's default goal is the composite's `effects` pinned via `WorldState.conditions(pinning:)`, overridable with the `subGoal:` initializer parameter.
+- `GOAPPlanner.refine(_:from:)` for lazy expansion of one composite from the state execution actually reached, and `planHierarchically(from:goal:tasks:maxDepth:)` for expanding the whole hierarchy up front. Returns a `Result` of `GOAPHierarchicalPlan` (per-level `steps`, actual `states`, `flattened` executable primitives) or `GOAPHierarchyError` (`.noPlan`, `.refinementFailed(subPlanner:depth:)`, `.inconsistent(after:depth:)`, `.depthExceeded(subPlanner:)`).
+- `WorldState.conditions(pinning:)` — turns effects into absolute goal conditions — with implementations for `BooleanWorldState` (bit-mask intersection) and `RichWorldState` (`set` / `add` / `subtract` effects become `.equals` on the value reached).
+- 25 hierarchical-planning tests (sub-goal pinning, lazy `refine`, nested sub-planners, every `GOAPHierarchyError` case), bringing the suite to 79, plus a DocC article under Sources/SwiftGOAP/SwiftGOAP.docc.
+
 ## [0.1.0] — 2026-05-14
 
 First public release. The first open-source GOAP (Goal-Oriented Action Planning) library for Swift.

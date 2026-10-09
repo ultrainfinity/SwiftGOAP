@@ -20,6 +20,13 @@ final class SendableConformanceTests: XCTestCase {
         requireSendable(BasicAction<RichWorldState>.self)
         requireSendable(GOAPPlan<BasicAction<BooleanWorldState>>.self)
         requireSendable(GOAPPlan<BasicAction<RichWorldState>>.self)
+        requireSendable(GOAPSubPlanner<BasicAction<BooleanWorldState>>.self)
+        requireSendable(GOAPSubPlanner<BasicAction<RichWorldState>>.self)
+        requireSendable(GOAPTask<BasicAction<BooleanWorldState>>.self)
+        requireSendable(GOAPTask<BasicAction<RichWorldState>>.self)
+        requireSendable(GOAPHierarchicalPlan<BasicAction<BooleanWorldState>>.self)
+        requireSendable(GOAPHierarchicalPlan<BasicAction<RichWorldState>>.self)
+        requireSendable(GOAPHierarchyError.self)
         requireSendable(PriorityQueue<Int>.self)
     }
 

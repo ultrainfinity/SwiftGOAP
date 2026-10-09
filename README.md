@@ -19,6 +19,7 @@ That means you can change the world, add new actions, or shift the agent's goals
   - `BooleanWorldState` — 64 boolean facts in a single `UInt64`. O(1) compares, O(1) updates, ideal for performance-critical agents.
   - `RichWorldState` — `[String: StateValue]` with bool / int / double / string values, supporting numeric conditions (`>=`, `<`, etc.) and effects (`add`, `subtract`).
 - **A\* planner** with closed-set optimisation, optimal-cost search, and a configurable expansion cap.
+- **Hierarchical planning.** Composite actions (`GOAPSubPlanner`) that are an action and a planner at once — a single step at the top level, a sub-plan of `GOAPTask` children beneath, with the sub-goal defaulting to the composite's own `effects`. Expand lazily with `refine` as execution reaches each composite, or the whole tree up front with `planHierarchically`.
 - **`GOAPPlan` value type** carrying the action sequence, total cost, and the full trajectory of intermediate states.
 - **Type-safe facts.** `BooleanWorldState` accepts any `RawRepresentable` whose `RawValue` is `Int`, so you can use enums instead of magic indices.
 - **Multi-goal support** with `.priority` (first-achievable) or `.maxUtility` (best `priority - cost`) selection strategies.
@@ -178,6 +179,78 @@ for action in plan.actions {
 You can also use `plan.states` directly — it contains the start state, every intermediate state, and the goal-satisfying final state. Handy for visualisation and debugging.
 
 When the world drifts (a door closes, ammo is taken), drop the plan and re-plan from the new state. Re-planning is cheap.
+
+## Hierarchical planning
+
+A flat action set forces every step onto one level: "engage the enemy" is either a single opaque action or a dozen primitives all competing for the planner's attention. A composite action is both at once — an ordinary action to the level that contains it, sequenced by its `preconditions`, `effects`, and `cost`, and a planner of its own when execution reaches it. `GOAPSubPlanner` is the ready-made value type: its `children` are `GOAPTask`s, each either a primitive action or another sub-planner, so hierarchies nest to any depth. Custom composites only need to conform to `GOAPCompositeAction`.
+
+A sub-plan needs a goal, and the default falls out of the action itself: the composite's `effects`, pinned to the values they actually produce — `conditions(pinning:)` turns the declaration "the enemy ends up dead" into an absolute target the children must deliver, whatever route they take. The declared effects are a promise, not a recipe. Pass `subGoal:` to compute a different goal from the starting state.
+
+```swift
+typealias Prim = BasicAction<BooleanWorldState>
+
+enum Fact: Int { case hasGun, gunLoaded, enemyDead, atCover, reported }
+
+let pickupGun = Prim(
+    name: "pickupGun",
+    preconditions: BooleanWorldState.facts([(Fact.hasGun, false)]),
+    effects:       BooleanWorldState.facts([(Fact.hasGun, true)])
+)
+let loadGun = Prim(
+    name: "loadGun",
+    preconditions: BooleanWorldState.facts([(Fact.hasGun, true), (Fact.gunLoaded, false)]),
+    effects:       BooleanWorldState.facts([(Fact.gunLoaded, true)])
+)
+let shootEnemy = Prim(
+    name: "shootEnemy",
+    preconditions: BooleanWorldState.facts([(Fact.hasGun, true), (Fact.gunLoaded, true)]),
+    effects:       BooleanWorldState.facts([(Fact.gunLoaded, false), (Fact.enemyDead, true)])
+)
+let takeCover = Prim(
+    name: "takeCover",
+    preconditions: BooleanWorldState.facts([(Fact.atCover, false)]),
+    effects:       BooleanWorldState.facts([(Fact.atCover, true)])
+)
+let radioIn = Prim(
+    name: "radioIn",
+    preconditions: BooleanWorldState.facts([(Fact.enemyDead, true)]),
+    effects:       BooleanWorldState.facts([(Fact.reported, true)])
+)
+
+// One action at this level; a planner of its own beneath.
+let engage = GOAPSubPlanner<Prim>(
+    name: "engage",
+    preconditions: BooleanWorldState.facts([(Fact.atCover, true)]),
+    effects:       BooleanWorldState.facts([(Fact.enemyDead, true)]),
+    children: [.primitive(pickupGun), .primitive(loadGun), .primitive(shootEnemy)]
+)
+
+let start = BooleanWorldState.facts([
+    (Fact.hasGun, false), (Fact.gunLoaded, false), (Fact.enemyDead, false),
+    (Fact.atCover, false), (Fact.reported, false),
+])
+let goal = BooleanWorldState.facts([(Fact.reported, true)])
+
+let tasks: [GOAPTask<Prim>] = [
+    .primitive(takeCover), .subPlanner(engage), .primitive(radioIn),
+]
+
+let result = GOAPPlanner<BooleanWorldState>().planHierarchically(
+    from: start,
+    goal: goal,
+    tasks: tasks
+)
+
+let hierarchy = try result.get()
+// hierarchy.steps.count == 3   // takeCover, engage (with its own sub-plan), radioIn
+
+let plan = hierarchy.flattened
+// plan.actions.map(\.name) == ["takeCover", "pickupGun", "loadGun", "shootEnemy", "radioIn"]
+```
+
+`flattened` collapses the hierarchy into the executable `GOAPPlan` of primitives; the unflattened `steps` keep every sub-plan alongside the sub-planner that produced it, and `states` holds the trajectory of states each level actually moves through.
+
+Expanding the whole tree up front is one style; the other is lazy. Because `GOAPTask` conforms to `GOAPAction`, a plain `plan(from:goal:actions:)` accepts a mixed task set and treats each sub-planner as a single step — call `refine(_:from:)` when execution reaches it, and the sub-plan starts from the world as it actually is. `refine` returns `nil` when the children cannot reach the sub-goal. `planHierarchically` reports failure as a `GOAPHierarchyError`: `.noPlan` when the top level has no route to the goal, `.refinementFailed(subPlanner:depth:)` when a sub-plan falls short, `.inconsistent(after:depth:)` when the state an expansion actually reached breaks the next step or the level's goal, and `.depthExceeded(subPlanner:)` when expansion would nest past `maxDepth`.
 
 ## Performance notes
 

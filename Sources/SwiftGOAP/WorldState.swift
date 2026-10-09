@@ -22,6 +22,15 @@ public protocol WorldState: Hashable, Sendable {
     /// are unchanged.
     func applying(_ effects: Effects) -> Self
 
+    /// Conditions that hold exactly when every fact mentioned by `effects` has
+    /// the value it has in this state. Facts that `effects` doesn't mention
+    /// are unconstrained.
+    ///
+    /// Call this on the state *after* applying `effects` to turn a change into
+    /// an absolute target: a relative effect such as "add 3 to ammo" becomes
+    /// "ammo equals the value reached", independent of where it was applied.
+    func conditions(pinning effects: Effects) -> Conditions
+
     /// An admissible heuristic estimate of the cost from this state to any
     /// state that satisfies `conditions`. Must never overestimate, or A* will
     /// no longer be guaranteed optimal.
