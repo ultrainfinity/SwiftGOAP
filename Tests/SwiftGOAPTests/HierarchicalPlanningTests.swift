@@ -38,10 +38,10 @@ final class HierarchicalPlanningTests: XCTestCase {
     )
 
     /// "engage": the enemy ends up dead, however the gun gets ready.
-    private func engage(children: [GOAPTask<Prim>]? = nil) -> GOAPSubPlanner<Prim> {
+    private func engage(cost: Int = 3, children: [GOAPTask<Prim>]? = nil) -> GOAPSubPlanner<Prim> {
         GOAPSubPlanner(
             name: "engage",
-            cost: 3,
+            cost: cost,
             preconditions: BooleanWorldState.facts([(3, true)]),
             effects: BooleanWorldState.facts([(2, true)]),
             children: children ?? [.primitive(pickup), .primitive(load), .primitive(shoot)]
@@ -90,9 +90,12 @@ final class HierarchicalPlanningTests: XCTestCase {
     }
 
     func testRichPinningSetBecomesEquals() {
-        let after = RichWorldState(["door": "open", "alarm": false])
-        let pinned = after.conditions(pinning: ["door": .set("open")])
-        XCTAssertEqual(pinned, ["door": .equals("open")])
+        // The pinned value comes from self, not from the effect's payload, and
+        // facts outside the effects are not constrained.
+        let before = RichWorldState(["door": "closed", "alarm": false])
+        let effects: [String: StateEffect] = ["door": .set("open")]
+        XCTAssertEqual(before.conditions(pinning: effects), ["door": .equals("closed")])
+        XCTAssertEqual(before.applying(effects).conditions(pinning: effects), ["door": .equals("open")])
     }
 
     func testRichPinningAddBecomesAbsoluteValue() {
@@ -230,8 +233,9 @@ final class HierarchicalPlanningTests: XCTestCase {
 
     func testFlattenedTotalCostSumsPrimitiveCosts() throws {
         // takeCover 1 + pickup 1 + load 1 + shoot 1 + radio 1 = 5, whereas the
-        // declared cost of "engage" is 3.
-        let plan = try solve(agentTasks()).get()
+        // declared cost of "engage" is 10 (the level would sum to 12).
+        let tasks: [GOAPTask<Prim>] = [.primitive(takeCover), .subPlanner(engage(cost: 10)), .primitive(radioIn)]
+        let plan = try solve(tasks).get()
         XCTAssertEqual(plan.flattened.totalCost, 5)
     }
 
@@ -285,14 +289,55 @@ final class HierarchicalPlanningTests: XCTestCase {
         XCTAssertEqual(solve(tasks).failure, .refinementFailed(subPlanner: "engage", depth: 1))
     }
 
-    func testInconsistentWhenChildrenBreakNextPrecondition() {
-        // "sneakPast" needs empty hands, but engage's children pick the gun up
-        // even though its declared effects never mention it.
-        let sneakPast = Prim(
-            name: "sneakPast",
-            preconditions: fact([(0, false), (2, true)]),
-            effects: fact([(4, true)])
+    func testRefinementFailedAtDepthTwo() {
+        // outer → takeCover, engage (children fall short), radioIn
+        let outer = GOAPSubPlanner<Prim>(
+            name: "outer",
+            preconditions: BooleanWorldState(),
+            effects: fact([(4, true)]),
+            children: [
+                .primitive(takeCover),
+                .subPlanner(engage(children: [.primitive(pickup), .primitive(load)])),
+                .primitive(radioIn),
+            ]
         )
+        XCTAssertEqual(
+            solve([.subPlanner(outer)]).failure,
+            .refinementFailed(subPlanner: "engage", depth: 2)
+        )
+    }
+
+    func testInconsistentAtNestedLevel() {
+        let outer = GOAPSubPlanner<Prim>(
+            name: "outer",
+            preconditions: BooleanWorldState(),
+            effects: fact([(4, true)]),
+            children: [.primitive(takeCover), .subPlanner(engage()), .primitive(sneakPast)]
+        )
+        XCTAssertEqual(
+            solve([.subPlanner(outer)]).failure,
+            .inconsistent(after: "engage", depth: 1)
+        )
+    }
+
+    func testMaxDepthZeroAllowsPrimitiveOnlyPlan() throws {
+        // radioIn needs the enemy dead, so shooting comes first.
+        let tasks: [GOAPTask<Prim>] = [
+            .primitive(pickup), .primitive(load), .primitive(shoot), .primitive(radioIn),
+        ]
+        let plan = try solve(tasks, maxDepth: 0).get()
+        XCTAssertEqual(plan.flattened.actions.map(\.name), ["pickupGun", "loadGun", "shootEnemy", "radioIn"])
+    }
+
+    // "sneakPast" needs empty hands, but engage's children pick the gun up
+    // even though its declared effects never mention it.
+    private let sneakPast = Prim(
+        name: "sneakPast",
+        preconditions: BooleanWorldState.facts([(0, false), (2, true)]),
+        effects: BooleanWorldState.facts([(4, true)])
+    )
+
+    func testInconsistentWhenChildrenBreakNextPrecondition() {
         let tasks: [GOAPTask<Prim>] = [
             .primitive(takeCover), .subPlanner(engage()), .primitive(sneakPast),
         ]
